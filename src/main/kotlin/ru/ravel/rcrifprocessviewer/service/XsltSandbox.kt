@@ -62,6 +62,7 @@ object XsltSandbox {
 		activity: ProcessActivity,
 		call: ActivityCall,
 		target: XsltSandboxTarget,
+		debugPort: Int? = null,
 	) {
 		val xslt = File(activity.dir ?: error("Для ${activity.reference} не найдена папка активности"), target.fileName)
 		require(xslt.isFile) { "Нет файла ${xslt.absolutePath}" }
@@ -73,9 +74,18 @@ object XsltSandbox {
 		dataFile.writeText(data)
 
 		ProcessBuilder(
-			executable.absolutePath,
-			"--input-xslt-path", xslt.absolutePath,
-			"--input-data-path", dataFile.absolutePath,
+			buildList {
+				add(executable.absolutePath)
+				add("--input-xslt-path")
+				add(xslt.absolutePath)
+				add("--input-data-path")
+				add(dataFile.absolutePath)
+				// sandbox шлёт шаги отладчика в viewer на этот порт
+				debugPort?.let {
+					add("--debug-port")
+					add(it.toString())
+				}
+			},
 		)
 			.redirectErrorStream(true)
 			.redirectOutput(ProcessBuilder.Redirect.DISCARD)

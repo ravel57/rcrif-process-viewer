@@ -59,6 +59,9 @@ import javafx.util.StringConverter
 import ru.ravel.rcrifprocessviewer.config.AppConfig
 import ru.ravel.rcrifprocessviewer.db.ActivityCall
 import ru.ravel.rcrifprocessviewer.db.ActivityPassRepository
+import ru.ravel.rcrifprocessviewer.debug.DebugCallsRepository
+import ru.ravel.rcrifprocessviewer.debug.DebugSocketServer
+import ru.ravel.rcrifprocessviewer.debug.DebugSteps
 import ru.ravel.rcrifprocessviewer.db.JdbcActivityPassRepository
 import ru.ravel.rcrifprocessviewer.db.ProcessTraceEvent
 import ru.ravel.rcrifprocessviewer.db.RequestTraceEntry
@@ -74,7 +77,12 @@ import ru.ravel.rcrifprocessviewer.service.ProcessVersionOption
 import ru.ravel.rcrifprocessviewer.service.TraceActivityMatcher
 import ru.ravel.rcrifprocessviewer.service.XsltSandbox
 import ru.ravel.rcrifprocessviewer.service.XsltSandboxTarget
+import ru.ravel.rcrifprocessviewer.flow.ActivityRef
+import ru.ravel.rcrifprocessviewer.flow.NestedPathFinder
+import ru.ravel.rcrifprocessviewer.flow.ProcedureCatalog
 import ru.ravel.rcrifprocessviewer.ui.DataDocumentsWindow
+import ru.ravel.rcrifprocessviewer.ui.PathDialog
+import ru.ravel.rcrifprocessviewer.ui.PathGraphModelFactory
 import ru.ravel.rcrifprocessviewer.ui.ProcessDiagramPane
 import ru.ravel.rcrifprocessviewer.ui.SettingsWindow
 import java.io.File
@@ -158,6 +166,14 @@ class RCrifProcessViewer : Application() {
 
 	/** "Выход", переведённый в реальную подпись стрелки дизайнера (см. resolveExitLabels). */
 	private val resolvedExitLabels = IdentityHashMap<RequestTraceEntry, String>()
+	/** Шаги отладчика xslt-sandbox: по ним активности получают оранжевую рамку и вкладки «Отладка N». */
+	private val debugSteps = DebugSteps()
+	private val debugServer = DebugSocketServer { step ->
+		Platform.runLater {
+			debugSteps.add(step)
+			refreshDebugMarks()
+		}
+	}
 	private lateinit var layoutTabs: TabPane
 	private val openLayoutTabs = linkedMapOf<String, Tab>()
 	private val loadingLayoutKeys = mutableSetOf<String>()
@@ -179,6 +195,8 @@ class RCrifProcessViewer : Application() {
 		var traceEvents: List<ProcessTraceEvent> = emptyList(),
 		var loadedRequestNumber: String? = null,
 		var needsInitialFit: Boolean = true,
+		/** Вид пути строится из синтетической модели — сохранять его в Layout.xml нельзя. */
+		val isPathView: Boolean = false,
 	)
 
 	override fun start(stage: Stage) {
@@ -214,6 +232,7 @@ class RCrifProcessViewer : Application() {
 		super.stop()
 		AppConfig.save(folderField.text, requestNumberField.text)
 		autoRefreshTimeline?.stop()
+		debugServer.close()
 		executor.shutdownNow()
 		searchExecutor.shutdownNow()
 		(repository as? AutoCloseable)?.close()
@@ -227,12 +246,14 @@ class RCrifProcessViewer : Application() {
 			pane.onDeleteConfirmationRequest = ::confirmDelete
 			pane.activityCallsProvider = ::loadActivityCallsForMenu
 			pane.onOpenInXsltSandbox = ::openInXsltSandbox
+			pane.updateDebugMarks(debugSteps.markKeys())
 			wireUndoManager(pane)
 		}
 
 	/** Для сопоставления переименованных активностей берём сырой id из уже загруженного трейса. */
 	private fun loadActivityCallsForMenu(procedureName: String, activity: ProcessActivity): List<ActivityCall> {
 		val traceReference = currentLayoutState()?.traceEvents
+			?.takeIf { activity.procedureName == null }
 			?.lastOrNull { it.activityReference.equals(activity.reference, ignoreCase = true) }
 			?.traceActivityReference
 		return repository.loadActivityCalls(
@@ -244,10 +265,17 @@ class RCrifProcessViewer : Application() {
 
 	private fun openInXsltSandbox(activity: ProcessActivity, call: ActivityCall, target: XsltSandboxTarget) {
 		val executable = XsltSandbox.configuredExecutable() ?: chooseXsltSandboxExecutable() ?: return
-		runCatching { XsltSandbox.launch(executable, activity, call, target) }
+		// Порт случайный: сервер поднимается при первом запуске и дальше переиспользуется.
+		val debugPort = runCatching { debugServer.ensureStarted() }.getOrNull()
+		runCatching { XsltSandbox.launch(executable, activity, call, target, debugPort) }
 			.onFailure { error ->
 				warn("Не удалось открыть ${activity.reference}/${target.fileName} в XSLT-sandbox: ${error.message}")
 			}
+	}
+
+	private fun refreshDebugMarks() {
+		val marks = debugSteps.markKeys()
+		openLayoutTabs.values.forEach { (it.userData as? LayoutTabState)?.diagram?.updateDebugMarks(marks) }
 	}
 
 	private fun chooseXsltSandboxExecutable(): File? {
@@ -831,6 +859,11 @@ class RCrifProcessViewer : Application() {
 			}
 		}
 
+		val pathButton = Button("Показать путь").apply {
+			tooltip = Tooltip("Кратчайший путь между двумя блоками (в том числе во вложенных процедурах)")
+			setOnAction { showPath() }
+		}
+
 		// П.5 ТЗ: отмена/повтор.
 		undoButton.apply {
 			isDisable = true
@@ -855,6 +888,8 @@ class RCrifProcessViewer : Application() {
 			fitButton,
 			Separator(Orientation.VERTICAL),
 			buildSearchBox(),
+			Separator(Orientation.VERTICAL),
+			pathButton,
 		).apply {
 			alignment = Pos.CENTER_LEFT
 			padding = Insets(0.0, 10.0, 8.0, 10.0)
@@ -1324,6 +1359,7 @@ class RCrifProcessViewer : Application() {
 	) {
 		loader = processLoader
 		exitLabelModels.clear()
+		procedureCatalog = null
 		activeProcessVersion = version
 		if (remember) {
 			AppConfig.saveProcessVersion(version.gitRef)
@@ -1382,6 +1418,106 @@ class RCrifProcessViewer : Application() {
 			}
 		}
 		openProcedure(target)
+	}
+
+	/** Каталог всех процедур процесса: собирается один раз на выбранную папку/версию. */
+	private var procedureCatalog: ProcedureCatalog? = null
+
+	/** Выбор начала/конца (в том числе во вложенных процедурах), кратчайшие пути — отдельной вкладкой. */
+	private fun showPath() {
+		val state = currentLayoutState()
+		if (state == null || state.isPathView) {
+			warn("Откройте процедуру, по которой нужно построить путь.")
+			return
+		}
+		val processLoader = loader ?: return
+		val cached = procedureCatalog
+		if (cached != null) {
+			choosePath(state, cached)
+			return
+		}
+		runInBackground(
+			work = {
+				ProcedureCatalog(
+					processLoader.procedures().mapNotNull { ref -> runCatching { processLoader.load(ref) }.getOrNull() },
+				)
+			},
+			onDone = { catalog ->
+				if (processLoader === loader) {
+					procedureCatalog = catalog
+					choosePath(state, catalog)
+				}
+			},
+			onFail = { error -> warn("Не удалось прочитать процедуры процесса: ${error.message}") },
+		)
+	}
+
+	private fun choosePath(state: LayoutTabState, catalog: ProcedureCatalog) {
+		val model = state.model
+		val choice = PathDialog.show(
+			diagramScroll.scene?.window,
+			model,
+			catalog,
+			state.diagram.selectedActivity(),
+		) ?: return
+
+		val result = NestedPathFinder.find(
+			catalog, model.name, choice.start, choice.end, choice.extraCallDepth, shortestOnly = true,
+		)
+		if (result == null) {
+			warn("Из выбранного начала до конца пути нет.")
+			return
+		}
+
+		val titleOf = { ref: ActivityRef ->
+			val flow = catalog.find(ref.procedure)
+			val name = if (ref.uid == flow?.startUid) "СТАРТ" else flow?.activities?.get(ref.uid)?.reference ?: ref.uid
+			if (flow == null || flow.name.equals(model.name, ignoreCase = true)) name else "$name (${flow.name})"
+		}
+		val title = "${titleOf(choice.start)} → ${titleOf(choice.end)}"
+		val key = "path:${layoutKey(state.ref)}:${choice.start}:${choice.end}:${choice.extraCallDepth}"
+		openLayoutTabs[key]?.let {
+			layoutTabs.selectionModel.select(it)
+			return
+		}
+
+		val graph = result.paths
+		val pathModel = PathGraphModelFactory.build(catalog, model, result)
+		val pane = createDiagramPane()
+		val scroll = createDiagramScroll(pane)
+		pane.render(pathModel, emptyMap())
+		val pathState = LayoutTabState(
+			key = key,
+			ref = ProcedureRef("Путь: $title", model.dir, isMainFlow = false),
+			model = pathModel,
+			diagram = pane,
+			scroll = scroll,
+			isPathView = true,
+		)
+		val count = graph.countPaths()
+		val tab = Tab("Путь: $title", scroll).apply {
+			isClosable = true
+			userData = pathState
+			tooltip = Tooltip(
+				buildString {
+					append("Кратчайшие пути. ")
+					append("Блоков: ").append(graph.nodes.size).append(", стрелок: ").append(graph.edges.size)
+					append(", путей: ").append(if (count.exact) "" else "не менее ").append(count.value)
+					if (graph.hasCycles) append(", есть циклы")
+					if (result.procedures.size > 1) append("\nПроцедуры: ").append(result.procedures.joinToString(", "))
+					if (result.flow.truncated) append("\nЧасть вызовов не развёрнута из-за лимита глубины/размера")
+				},
+			)
+			setOnClosed { openLayoutTabs.remove(key) }
+		}
+		openLayoutTabs[key] = tab
+		layoutTabs.tabs += tab
+		layoutTabs.selectionModel.select(tab)
+		graph.ends.firstOrNull()?.let { endId ->
+			pathModel.activities.firstOrNull { it.uid == endId }?.let { end ->
+				Platform.runLater { pane.selectOnly(end) }
+			}
+		}
 	}
 
 	private fun openProcedure(
@@ -1739,6 +1875,10 @@ class RCrifProcessViewer : Application() {
 			warn("Нет открытого layout'а для сохранения.")
 			return
 		}
+		if (state.isPathView) {
+			warn("Вкладка пути — расчётный вид, его нельзя сохранить в Layout.xml.")
+			return
+		}
 		runCatching {
 			LayoutSaver.save(
 				model = state.model,
@@ -1767,9 +1907,9 @@ class RCrifProcessViewer : Application() {
 		DataDocumentsWindow.show(
 			owner = folderField.scene?.window,
 			requestNumber = requestNumberField.text.orEmpty().trim(),
-			procedureName = model.name,
+			procedureName = activity.procedureName ?: model.name,
 			activity = activity,
-			repository = repository,
+			repository = DebugCallsRepository(repository, debugSteps),
 			traceActivities = traceActivities,
 			initialTraceIndex = initialTraceIndex,
 			onShowOnLayout = { target -> showActivityOnLayout(state, target) },

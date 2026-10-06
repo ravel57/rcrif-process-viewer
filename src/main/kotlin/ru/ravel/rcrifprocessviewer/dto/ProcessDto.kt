@@ -42,6 +42,16 @@ data class ProcessActivity(
 	val dataDocuments: List<ReferredDocument>,
 	/** Идентификатор активности в runtime-трейсе, если выбранный layout использует другое имя. */
 	val traceReference: String? = null,
+	/**
+	 * Для ProcedureReturn — имя выхода вызывающего блока, в который возвращается управление
+	 * (ConnectionID из Properties.xml; пустое значение означает Completed).
+	 */
+	val returnExit: String? = null,
+	/**
+	 * Процедура, которой на самом деле принадлежит блок. Заполняется только в виде пути, где
+	 * в одну схему собраны блоки из нескольких процедур; у обычных схем равно null.
+	 */
+	val procedureName: String? = null,
 )
 
 

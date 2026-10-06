@@ -83,6 +83,7 @@ class ProcessLoader(val root: File) {
 				procedureToCall = activityMeta?.procedureToCall,
 				dir = activityMeta?.dir,
 				dataDocuments = activityMeta?.documents.orEmpty(),
+				returnExit = activityMeta?.returnExit,
 			)
 		}.toMutableList()
 
@@ -155,12 +156,17 @@ class ProcessLoader(val root: File) {
 						} else {
 							null
 						},
+						returnExit = if (type == ActivityType.PROCEDURE_RETURN) returnExitOf(xml) else null,
 						xml = xml,
 					)
 				}
 				.toMap()
 		}
 	}
+
+	/** ConnectionID блока ProcedureReturn: куда вернётся вызывающий блок. Пустой — Completed. */
+	private fun returnExitOf(xml: String): String =
+		CONNECTION_ID_REGEX.find(xml)?.groupValues?.get(1)?.trim().orEmpty()
 
 	/** Тип активности определяется по имени корневого элемента Properties.xml. */
 	private fun detectType(xml: String): ActivityType {
@@ -188,6 +194,7 @@ class ProcessLoader(val root: File) {
 		val type: ActivityType,
 		val documents: List<ReferredDocument>,
 		val procedureToCall: String?,
+		val returnExit: String?,
 		val xml: String,
 	)
 
@@ -205,5 +212,7 @@ class ProcessLoader(val root: File) {
 
 		/** Первый настоящий тег: `<?xml ...` и `<!-- ... -->` под шаблон не попадают. */
 		val ROOT_TAG_REGEX = Regex("""<\s*([A-Za-z][A-Za-z0-9_.\-]*)""")
+
+		val CONNECTION_ID_REGEX = Regex("""<ConnectionID>([^<]*)</ConnectionID>""")
 	}
 }

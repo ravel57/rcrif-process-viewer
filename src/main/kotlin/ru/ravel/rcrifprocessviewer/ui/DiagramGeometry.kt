@@ -28,6 +28,14 @@ object DiagramGeometry {
 
 	const val START_SIZE = 24.0
 
+	/** Высота блока с [exitCount] выходными портами. */
+	fun requiredBlockHeight(exitCount: Int): Double {
+		if (exitCount <= 1) return BLOCK_MIN_HEIGHT
+		val portsHeight = (PORT_RADIUS + OUTPUT_PORT_EDGE_PADDING) * 2.0 +
+			(exitCount - 1) * OUTPUT_PORT_VERTICAL_SPACING
+		return max(BLOCK_MIN_HEIGHT, ceil(portsHeight))
+	}
+
 	/** Короткий прямой участок за портом до первого/последнего поворота. */
 	const val PORT_STUB = 14.0
 

@@ -32,6 +32,7 @@ import javafx.scene.text.TextAlignment
 import javafx.scene.transform.Scale
 import ru.ravel.rcrifprocessviewer.db.ProcessTraceEvent
 import ru.ravel.rcrifprocessviewer.db.ActivityCall
+import ru.ravel.rcrifprocessviewer.debug.DebugSteps
 import ru.ravel.rcrifprocessviewer.dto.ActivityType
 import ru.ravel.rcrifprocessviewer.dto.ProcedureModel
 import ru.ravel.rcrifprocessviewer.dto.ProcessActivity
@@ -135,6 +136,9 @@ class ProcessDiagramPane(
 	private var traceEvents: List<ProcessTraceEvent> = emptyList()
 	private var activityTimings: Map<String, ActivityTiming> = emptyMap()
 	private var connectionTraceColors: Map<ProcessConnection, Color> = emptyMap()
+
+	/** Ключи (процедура/активность, см. [DebugSteps.keyOf]) активностей, выполненных в отладчике. */
+	private var debugMarks: Set<String> = emptySet()
 
 	private var originX = 0.0
 	private var originY = 0.0
@@ -279,6 +283,18 @@ class ProcessDiagramPane(
 		rebuildOutputPortLayoutCache(model)
 		recalculateOrigin(model)
 		invalidate()
+	}
+
+	/** Оранжевая рамка у активностей, которые выполняли отладчиком xslt-sandbox. */
+	fun updateDebugMarks(marks: Set<String>) {
+		if (marks == debugMarks) return
+		debugMarks = marks
+		invalidate()
+	}
+
+	private fun isDebugged(activity: ProcessActivity): Boolean {
+		val procedure = activity.procedureName ?: model?.name ?: return false
+		return DebugSteps.keyOf(procedure, activity.reference) in debugMarks
 	}
 
 	/**
@@ -528,6 +544,9 @@ class ProcessDiagramPane(
 	}
 
 	/** Выделить ровно один блок — используется поиском и переходом по стрелке. */
+	/** Единственный выделенный блок; null — не выделено ничего или выделено несколько. */
+	fun selectedActivity(): ProcessActivity? = selectedActivities.singleOrNull()
+
 	fun selectOnly(activity: ProcessActivity) {
 		selectedActivities.clear()
 		selectedConnections.clear()
@@ -830,13 +849,7 @@ class ProcessDiagramPane(
 		outputPortsByUid = positions
 	}
 
-	private fun requiredBlockHeight(exitCount: Int): Double {
-		if (exitCount <= 1) return DiagramGeometry.BLOCK_MIN_HEIGHT
-		val portsHeight =
-			(DiagramGeometry.PORT_RADIUS + DiagramGeometry.OUTPUT_PORT_EDGE_PADDING) * 2.0 +
-				(exitCount - 1) * DiagramGeometry.OUTPUT_PORT_VERTICAL_SPACING
-		return max(DiagramGeometry.BLOCK_MIN_HEIGHT, ceil(portsHeight))
-	}
+	private fun requiredBlockHeight(exitCount: Int): Double = DiagramGeometry.requiredBlockHeight(exitCount)
 
 	private fun blockHeight(activity: ProcessActivity): Double =
 		blockHeightsByUid[activity.uid] ?: DiagramGeometry.BLOCK_MIN_HEIGHT
@@ -1505,7 +1518,7 @@ class ProcessDiagramPane(
 		val menu = ContextMenu()
 		menu.items += MenuItem(activity.reference).apply { isDisable = true }
 		menu.items += javafx.scene.control.SeparatorMenuItem()
-		menu.items += xsltSandboxMenu(model.name, activity)
+		menu.items += xsltSandboxMenu(activity.procedureName ?: model.name, activity)
 		menu.items += javafx.scene.control.SeparatorMenuItem()
 		menu.items += neighbourMenu(
 			title = "Предыдущие активности",
@@ -1755,6 +1768,11 @@ class ProcessDiagramPane(
 			box.height = rect.h
 			box.fill = ActivityPalette.fillFor(activity.type)
 			outlineScheme.applyTo(box, activity, passCount)
+			val debugged = isDebugged(activity)
+			if (debugged) {
+				box.stroke = DiagramStyle.DEBUGGED_STROKE
+				box.strokeWidth = 2.5
+			}
 
 			val selected = activity in selectedActivities
 			selectionFrame.isVisible = selected
@@ -1788,10 +1806,22 @@ class ProcessDiagramPane(
 			badge.isManaged = detailed
 			if (detailed) {
 				val passed = passCount > 0
-				badgeCircle.fill = if (passed) DiagramStyle.PASSED_BADGE_FILL else DiagramStyle.IDLE_BADGE_FILL
-				badgeCircle.stroke = if (passed) DiagramStyle.PASSED_STROKE else DiagramStyle.IDLE_BADGE_STROKE
+				badgeCircle.fill = when {
+					debugged -> DiagramStyle.DEBUGGED_BADGE_FILL
+					passed -> DiagramStyle.PASSED_BADGE_FILL
+					else -> DiagramStyle.IDLE_BADGE_FILL
+				}
+				badgeCircle.stroke = when {
+					debugged -> DiagramStyle.DEBUGGED_STROKE
+					passed -> DiagramStyle.PASSED_STROKE
+					else -> DiagramStyle.IDLE_BADGE_STROKE
+				}
 				badgeText.text = passCount.toString()
-				badgeText.fill = if (passed) DiagramStyle.PASSED_BADGE_TEXT else DiagramStyle.IDLE_BADGE_TEXT
+				badgeText.fill = when {
+					debugged -> DiagramStyle.DEBUGGED_BADGE_TEXT
+					passed -> DiagramStyle.PASSED_BADGE_TEXT
+					else -> DiagramStyle.IDLE_BADGE_TEXT
+				}
 				badge.layoutX = -DiagramStyle.BADGE_RADIUS
 				badge.layoutY = -DiagramStyle.BADGE_RADIUS
 			}
@@ -1846,6 +1876,7 @@ class ProcessDiagramPane(
 				Tooltip(
 					buildString {
 						append(activity.reference).append('\n')
+						activity.procedureName?.let { append("Процедура: ").append(it).append('\n') }
 						append("Тип: ").append(activity.type.name).append('\n')
 						append("Прохождений: ").append(passCount).append('\n')
 						append("Дата-документов: ").append(activity.dataDocuments.size)

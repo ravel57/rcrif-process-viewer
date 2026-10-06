@@ -75,14 +75,6 @@ object AppConfig {
 		store(properties)
 	}
 
-	fun saveTraceDatabaseSettings(settings: TraceDatabaseSettings) {
-		val properties = readAll()
-		properties[KEY_TRACE_DB_URL] = settings.url.trim()
-		properties[KEY_TRACE_DB_USER] = settings.user.trim()
-		properties[KEY_TRACE_DB_PASSWORD] = settings.password
-		store(properties)
-	}
-
 	fun save(folder: String?, requestNumber: String?) {
 		val properties = readAll()
 		folder?.let { properties[KEY_FOLDER] = it }

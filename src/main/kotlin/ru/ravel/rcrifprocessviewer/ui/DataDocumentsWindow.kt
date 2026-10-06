@@ -143,7 +143,7 @@ object DataDocumentsWindow {
 					tabClosingPolicy = TabPane.TabClosingPolicy.UNAVAILABLE
 					calls.forEach { call ->
 						tabs.add(
-							Tab("Вызов ${call.index}").apply {
+							Tab(call.label ?: "Вызов ${call.index}").apply {
 								content = callContent(
 									startedAt = call.startedAt,
 									finishedAt = call.finishedAt,

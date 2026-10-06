@@ -5,20 +5,19 @@ import javafx.geometry.Pos
 import javafx.scene.Scene
 import javafx.scene.control.Button
 import javafx.scene.control.Label
-import javafx.scene.control.PasswordField
 import javafx.scene.control.TextField
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Priority
 import javafx.scene.layout.VBox
 import javafx.stage.DirectoryChooser
+import javafx.stage.FileChooser
 import javafx.stage.Modality
 import javafx.stage.Stage
 import javafx.stage.Window
 import ru.ravel.rcrifprocessviewer.config.AppConfig
-import ru.ravel.rcrifprocessviewer.config.TraceDatabaseSettings
 import java.io.File
 
-/** Простое окно настроек viewer'а. */
+
 object SettingsWindow {
 
 	fun show(owner: Window?, onSaved: (() -> Unit)? = null) {
@@ -54,29 +53,36 @@ object SettingsWindow {
 			alignment = Pos.CENTER_LEFT
 		}
 
-		val databaseSettings = AppConfig.loadTraceDatabaseSettings()
-		val databaseUrlField = TextField(databaseSettings.url).apply {
-			promptText = "jdbc:postgresql://localhost:5432/ru_flow"
+		val xsltSandboxPathField = TextField(AppConfig.loadXsltSandboxPath().orEmpty()).apply {
+			promptText = "Исполняемый файл XSLTSandbox"
 		}
-		val databaseUserField = TextField(databaseSettings.user).apply {
-			promptText = "Пользователь PostgreSQL"
+		HBox.setHgrow(xsltSandboxPathField, Priority.ALWAYS)
+
+		val chooseXsltSandboxButton = Button("Выбрать файл").apply {
+			setOnAction {
+				val chooser = FileChooser().apply {
+					title = "Выберите XSLTSandbox"
+					val current = xsltSandboxPathField.text
+						?.trim()
+						?.takeIf(String::isNotEmpty)
+						?.let(::File)
+					current?.parentFile?.takeIf(File::isDirectory)?.let { initialDirectory = it }
+				}
+				chooser.showOpenDialog(stage)?.let { selected ->
+					xsltSandboxPathField.text = selected.absolutePath
+				}
+			}
 		}
-		val databasePasswordField = PasswordField().apply {
-			text = databaseSettings.password
-			promptText = "Пароль PostgreSQL"
+
+		val xsltSandboxRow = HBox(8.0, xsltSandboxPathField, chooseXsltSandboxButton).apply {
+			alignment = Pos.CENTER_LEFT
 		}
 
 		val saveButton = Button("Сохранить").apply {
 			isDefaultButton = true
 			setOnAction {
 				AppConfig.saveIdeaPath(ideaPathField.text)
-				AppConfig.saveTraceDatabaseSettings(
-					TraceDatabaseSettings(
-						url = databaseUrlField.text.orEmpty(),
-						user = databaseUserField.text.orEmpty(),
-						password = databasePasswordField.text.orEmpty(),
-					),
-				)
+				AppConfig.saveXsltSandboxPath(xsltSandboxPathField.text)
 				onSaved?.invoke()
 				stage.close()
 			}
@@ -93,11 +99,8 @@ object SettingsWindow {
 			10.0,
 			Label("Путь к IDEA:"),
 			pathRow,
-			Label("PostgreSQL с трейсами RU Flow:"),
-			databaseUrlField,
-			databaseUserField,
-			databasePasswordField,
-			Label("Пустой JDBC URL включает демонстрационную SQLite."),
+			Label("Путь к XSLT-sandbox:"),
+			xsltSandboxRow,
 			buttons,
 		).apply {
 			padding = Insets(16.0)

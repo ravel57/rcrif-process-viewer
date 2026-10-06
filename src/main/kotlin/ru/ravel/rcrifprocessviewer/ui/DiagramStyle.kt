@@ -8,6 +8,11 @@ object DiagramStyle {
 	val PASSED_BADGE_FILL: Color = Color.web("#e6f4ea")
 	val PASSED_BADGE_TEXT: Color = Color.web("#0f6b33")
 
+	/** Активность, которую выполняли отладчиком xslt-sandbox. */
+	val DEBUGGED_STROKE: Color = Color.web("#f57c00")
+	val DEBUGGED_BADGE_FILL: Color = Color.web("#fff3e0")
+	val DEBUGGED_BADGE_TEXT: Color = Color.web("#b85c00")
+
 	val IDLE_BADGE_FILL: Color = Color.web("#f1f3f4")
 	val IDLE_BADGE_STROKE: Color = Color.web("#c4c7c5")
 	val IDLE_BADGE_TEXT: Color = Color.web("#5f6368")

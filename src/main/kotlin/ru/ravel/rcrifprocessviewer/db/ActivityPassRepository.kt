@@ -88,6 +88,8 @@ data class ActivityCall(
 	val connectorOutput: String? = null,
 	/** Ошибка активности, если вызов завершился фазой failed. */
 	val error: String? = null,
+	/** Название вкладки в окне данных; null — «Вызов N». */
+	val label: String? = null,
 )
 
 
